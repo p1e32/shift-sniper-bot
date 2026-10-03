@@ -1,0 +1,20 @@
+# Environment
+venv/
+env/
+
+#  SQLite
+*.db
+*.sqlite3
+
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.log
+
+# VS Code
+.vscode/
+.DS_Store
+Thumbs.db
