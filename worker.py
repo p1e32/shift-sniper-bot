@@ -28,6 +28,13 @@ async def check_timeout(req_id, target_date, time_type, timeout_hours):
         return True
     return False
 
+
+async def sleep_between_users():
+    sleep_seconds = random.randint(160, 190)
+    print(f"Sleeping for {sleep_seconds} seconds...\n")
+    await asyncio.sleep(sleep_seconds)
+
+
 async def start_monitoring(bot_instance):
     from bot import notify_monitoring_stopped, notify_shift_booked, notify_error
     
@@ -35,12 +42,26 @@ async def start_monitoring(bot_instance):
     
     while True:
         users = get_users_with_requests()
-        
-        for user in users:
+
+        fast_users = [user for user in users if is_fast_user(user[1])]
+        regular_users = [user for user in users if not is_fast_user(user[1])]
+        ordered_users = []
+        fast_user = fast_users[0] if fast_users else None
+
+        for user in regular_users:
+            if fast_user is not None:
+                ordered_users.append(fast_user)
+            ordered_users.append(user)
+
+        if fast_user is not None and not regular_users:
+            ordered_users.append(fast_user)
+
+        for user in ordered_users:
             telegram_id, login, password, timeout_hours = user
             requests = database.get_active_requests(telegram_id)
             
             if not requests:
+                await sleep_between_users()
                 continue
                 
             driver = await asyncio.to_thread(parser.setup_driver)
@@ -92,6 +113,7 @@ async def start_monitoring(bot_instance):
                             # notify_shift_booked import can be here or at the top
                             from bot import notify_shift_booked
                             await notify_shift_booked(telegram_id, target_date, f"{time_type} ({target_shift_type})")
+                            await asyncio.sleep(3)
                             break
                             
                         elif error_msg:
@@ -107,15 +129,7 @@ async def start_monitoring(bot_instance):
                 print(f"Error in worker: {e}")
             finally:
                 await asyncio.to_thread(driver.quit)
-                
-        has_fast_user = any(
-            is_fast_user(login) for _, login, _, _ in users
-        )
-        sleep_seconds = (
-            random.randint(20, 40)
-            if has_fast_user
-            else random.randint(100, 240)
-        )
-        mode = "fast" if has_fast_user else "normal"
-        print(f"Sleeping for {sleep_seconds} seconds ({mode} mode)...\n")
-        await asyncio.sleep(sleep_seconds)
+                await sleep_between_users()
+
+        if not ordered_users:
+            await sleep_between_users()
