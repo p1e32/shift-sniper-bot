@@ -1,28 +1,23 @@
 import asyncio
 import random
-import sqlite3
 from datetime import datetime, timedelta
 import database
 import parser
 import time
 
 START_HOURS = {"06-14": 6, "14-22": 14, "22-06": 22, "ANY": 6}
+FAST_USER_LOGIN = "ohapkin2016@gmail.com"
 
 # Cache login errors to avoid spamming the user every minute
 login_errors = {}
 
 def get_users_with_requests():
-    conn = sqlite3.connect('shifts.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT DISTINCT u.telegram_id, u.portal_login, u.portal_password, u.stop_timeout
-        FROM users u
-        JOIN shift_requests r ON u.telegram_id = r.telegram_id
-        WHERE r.status = 'pending'
-    ''')
-    users = cursor.fetchall()
-    conn.close()
-    return users
+    return database.get_users_with_requests()
+
+
+def is_fast_user(login):
+    return login.strip().casefold() == FAST_USER_LOGIN
+
 
 async def check_timeout(req_id, target_date, time_type, timeout_hours):
     base_hour = START_HOURS.get(time_type, 6)
@@ -113,7 +108,14 @@ async def start_monitoring(bot_instance):
             finally:
                 await asyncio.to_thread(driver.quit)
                 
-        sleep_seconds = random.randint(100, 240)
-        # sleep_seconds = random.randint(20, 40)
-        print(f"Sleeping for {sleep_seconds} seconds...\n")
+        has_fast_user = any(
+            is_fast_user(login) for _, login, _, _ in users
+        )
+        sleep_seconds = (
+            random.randint(20, 40)
+            if has_fast_user
+            else random.randint(100, 240)
+        )
+        mode = "fast" if has_fast_user else "normal"
+        print(f"Sleeping for {sleep_seconds} seconds ({mode} mode)...\n")
         await asyncio.sleep(sleep_seconds)

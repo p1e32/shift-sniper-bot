@@ -1,4 +1,41 @@
 import sqlite3
+import os
+
+from cryptography.fernet import Fernet, InvalidToken
+
+
+ENCRYPTED_PASSWORD_PREFIX = "fernet:"
+
+
+def _get_password_cipher():
+    key = os.getenv("PASSWORD_ENCRYPTION_KEY")
+    if not key:
+        raise RuntimeError(
+            "PASSWORD_ENCRYPTION_KEY is not configured. "
+            "Generate one with `Fernet.generate_key()` and add it to .env."
+        )
+    try:
+        return Fernet(key.encode())
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("PASSWORD_ENCRYPTION_KEY is invalid.") from exc
+
+
+def _encrypt_password(password):
+    return ENCRYPTED_PASSWORD_PREFIX + _get_password_cipher().encrypt(
+        password.encode()
+    ).decode()
+
+
+def _decrypt_password(stored_password):
+    if not stored_password.startswith(ENCRYPTED_PASSWORD_PREFIX):
+        return stored_password, False
+
+    token = stored_password[len(ENCRYPTED_PASSWORD_PREFIX):].encode()
+    try:
+        password = _get_password_cipher().decrypt(token).decode()
+    except (InvalidToken, UnicodeDecodeError) as exc:
+        raise RuntimeError("Unable to decrypt a stored portal password.") from exc
+    return password, True
 
 def init_db():
     conn = sqlite3.connect('shifts.db')
@@ -29,9 +66,36 @@ def init_db():
 def add_user(telegram_id, login, password):
     conn = sqlite3.connect('shifts.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO users (telegram_id, portal_login, portal_password, stop_timeout) VALUES (?, ?, ?, 8)', (telegram_id, login, password))
+    encrypted_password = _encrypt_password(password)
+    cursor.execute('INSERT OR REPLACE INTO users (telegram_id, portal_login, portal_password, stop_timeout) VALUES (?, ?, ?, 8)', (telegram_id, login, encrypted_password))
     conn.commit()
     conn.close()
+
+
+def get_users_with_requests():
+    conn = sqlite3.connect('shifts.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT DISTINCT u.telegram_id, u.portal_login, u.portal_password, u.stop_timeout
+        FROM users u
+        JOIN shift_requests r ON u.telegram_id = r.telegram_id
+        WHERE r.status = 'pending'
+    ''')
+    stored_users = cursor.fetchall()
+    users = []
+
+    for telegram_id, login, stored_password, stop_timeout in stored_users:
+        password, is_encrypted = _decrypt_password(stored_password)
+        users.append((telegram_id, login, password, stop_timeout))
+        if not is_encrypted:
+            cursor.execute(
+                'UPDATE users SET portal_password = ? WHERE telegram_id = ?',
+                (_encrypt_password(password), telegram_id),
+            )
+
+    conn.commit()
+    conn.close()
+    return users
 
 def user_exists(telegram_id):
     conn = sqlite3.connect('shifts.db')
