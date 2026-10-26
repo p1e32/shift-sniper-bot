@@ -112,7 +112,10 @@ async def process_date(message: types.Message, state: FSMContext):
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🌅 Morning (06:00 - 14:00)", callback_data="time_06-14")],
+        [InlineKeyboardButton(text="🌄 Morning (08:00 - 16:00)", callback_data="time_08-16")],
+        [InlineKeyboardButton(text="☀️ Day (10:00 - 18:00)", callback_data="time_10-18")],
         [InlineKeyboardButton(text="🌇 Afternoon (14:00 - 22:00)", callback_data="time_14-22")],
+        [InlineKeyboardButton(text="🌆 Evening (16:00 - 22:00)", callback_data="time_16-22")],
         [InlineKeyboardButton(text="🌃 Night (22:00 - 06:00)", callback_data="time_22-06")],
         [InlineKeyboardButton(text="♾️ Any shift on this day", callback_data="time_ANY")]
     ])

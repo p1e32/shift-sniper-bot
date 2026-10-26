@@ -5,7 +5,15 @@ import database
 import parser
 import time
 
-START_HOURS = {"06-14": 6, "14-22": 14, "22-06": 22, "ANY": 6}
+START_HOURS = {
+    "06-14": 6,
+    "08-16": 8,
+    "10-18": 10,
+    "14-22": 14,
+    "16-22": 16,
+    "22-06": 22,
+    "ANY": 6,
+}
 FAST_USER_LOGIN = "ohapkin2016@gmail.com"
 
 # Cache login errors to avoid spamming the user every minute

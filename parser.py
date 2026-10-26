@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 def setup_driver():
     options = Options()
     # options.add_argument("--headless=new") # Enable headless mode
-    # options.add_argument("--no-sandbox") # Required for Linux servers
-    # options.add_argument("--disable-dev-shm-usage") # Helps with memory issues on Linux
+    options.add_argument("--no-sandbox") # Required for Linux servers
+    options.add_argument("--disable-dev-shm-usage") # Helps with memory issues on Linux
     
     options.add_argument("--headless=new")  # Headless mode
     
@@ -53,8 +53,31 @@ def show_maximum_shifts(driver):
     except Exception as e:
         print(f"Error while changing table display: {e}")
 
-def resolve_conflict_and_cancel(driver, target_date_str, target_from_str, target_to_str):
+
+def parse_shift_time(time_text):
+    try:
+        time_from, time_to = (part.strip() for part in time_text.split("-", 1))
+    except ValueError as exc:
+        raise ValueError(f"Unexpected shift time format: {time_text!r}") from exc
+    return time_from, time_to
+
+
+def get_shift_type(row, subscribe_btn=None):
+    shift_type_cells = row.find_elements(By.CSS_SELECTOR, "td[name='shift_type']")
+    if shift_type_cells:
+        return shift_type_cells[0].text.strip().upper()
+    if subscribe_btn is None:
+        return ""
+    return (
+        subscribe_btn.get_attribute("data-shift-type")
+        or subscribe_btn.get_attribute("data-name")
+        or ""
+    ).strip().upper()
+
+
+def resolve_conflict_and_cancel(driver, target_date_str, target_time_str):
     """Looks for a conflicting shift in the lower table and cancels it."""
+    target_from_str, target_to_str = parse_shift_time(target_time_str)
     # Create datetime objects for the desired shift
     t_start = datetime.strptime(f"{target_date_str} {target_from_str}", "%d.%m.%Y %H:%M")
     t_end = datetime.strptime(f"{target_date_str} {target_to_str}", "%d.%m.%Y %H:%M")
@@ -63,9 +86,9 @@ def resolve_conflict_and_cancel(driver, target_date_str, target_from_str, target
     rows = driver.find_elements(By.CSS_SELECTOR, "#scheduled_shifts_table tbody tr")
     for row in rows:
         try:
-            s_date = row.find_element(By.CSS_SELECTOR, "td[name='date']").text
-            s_from = row.find_element(By.CSS_SELECTOR, "td[name='time_from']").text
-            s_to = row.find_element(By.CSS_SELECTOR, "td[name='time_to']").text
+            s_date = row.find_element(By.CSS_SELECTOR, "td[name='date']").text.strip()
+            scheduled_time = row.find_element(By.CSS_SELECTOR, "td[name='time']").text.strip()
+            s_from, s_to = parse_shift_time(scheduled_time)
             
             s_start = datetime.strptime(f"{s_date} {s_from}", "%d.%m.%Y %H:%M")
             s_end = datetime.strptime(f"{s_date} {s_to}", "%d.%m.%Y %H:%M")
@@ -103,61 +126,83 @@ def resolve_conflict_and_cancel(driver, target_date_str, target_from_str, target
 
 def attempt_booking(driver, target_date, target_time_type, target_shift_type, force_booking):
     """Looks for a shift and returns (Status, Message). Status can be True, False, 'RELOAD', or 'NOTIFY'."""
-    base_hours = {"06-14": 6, "14-22": 14, "22-06": 22}
+    base_minutes = {
+        "06-14": 6 * 60,
+        "08-16": 8 * 60,
+        "10-18": 10 * 60,
+        "14-22": 14 * 60,
+        "16-22": 16 * 60,
+        "22-06": 22 * 60,
+    }
     
     # --- Internal row-scanning helper function ---
     def scan_rows(rows_to_check):
         for row in rows_to_check:
             try:
-                date = row.find_element(By.CSS_SELECTOR, "td[name='date']").text
-                time_from = row.find_element(By.CSS_SELECTOR, "td[name='time_from']").text
-                time_to = row.find_element(By.CSS_SELECTOR, "td[name='time_to']").text
+                date = row.find_element(By.CSS_SELECTOR, "td[name='date']").text.strip()
+                shift_time = row.find_element(By.CSS_SELECTOR, "td[name='time']").text.strip()
+                time_from, time_to = parse_shift_time(shift_time)
                 
                 if date == target_date:
-                    shift_start_hour = int(time_from.split(":")[0])
+                    shift_start_hour, shift_start_minute = (
+                        int(part) for part in time_from.split(":")
+                    )
+                    shift_start_minutes = shift_start_hour * 60 + shift_start_minute
                     is_match = False
                     
                     if target_time_type == "ANY":
                         is_match = True
                     else:
-                        target_hour = base_hours.get(target_time_type)
-                        if abs(shift_start_hour - target_hour) <= 2:
+                        target_minutes = base_minutes.get(target_time_type)
+                        if (
+                            target_minutes is not None
+                            and abs(shift_start_minutes - target_minutes) <= 45
+                        ):
                             is_match = True
                             
                     if is_match:
                         try:
                             subscribe_btn = row.find_element(By.CSS_SELECTOR, "button.subscribe_shift")
                         except NoSuchElementException:
-                            # Check for a lock (10-hour rule)
-                            try:
-                                row.find_element(By.CSS_SELECTOR, ".fa-ban")
-                                if force_booking == 1:
-                                    print(f"The shift {time_from} is blocked. Starting Force Booking...")
-                                    resolved, err = resolve_conflict_and_cancel(driver, date, time_from, time_to)
-                                    if resolved:
-                                        return "RELOAD", None 
-                                    else:
-                                        return False, err
-                                else:
-                                    continue
-                            except NoSuchElementException:
-                                continue
+                            subscribe_btn = None
 
-                        shift_info = subscribe_btn.get_attribute("data-name").upper()
+                        shift_info = get_shift_type(row, subscribe_btn)
                         
                         is_type_match = False
                         if target_shift_type == "IMPORT" and "IMPORT" in shift_info:
                             is_type_match = True
                         elif target_shift_type == "EXPORT" and "EXPORT" in shift_info:
                             is_type_match = True
-                        elif target_shift_type == "ANY" and ("IMPORT" in shift_info or "EXPORT" in shift_info):
+                        elif target_shift_type == "ANY":
                             is_type_match = True
                             
                         if not is_type_match:
                             continue 
 
+                        if subscribe_btn is None:
+                            print(
+                                f"Found blocked shift {date} {shift_time} "
+                                f"({shift_info or 'unknown type'})."
+                            )
+                            if force_booking == 2:
+                                return "NOTIFY", None
+                            if force_booking == 0:
+                                return (
+                                    False,
+                                    f"Found shift {date} {shift_time}, "
+                                    "but it is blocked by the 10-hour conflict.",
+                                )
+
+                            print(f"The shift {time_from} is blocked. Starting Force Booking...")
+                            resolved, err = resolve_conflict_and_cancel(
+                                driver, date, shift_time
+                            )
+                            if resolved:
+                                return "RELOAD", None
+                            return False, err
+
                         if force_booking == 2:
-                            print(f"🔔 Found shift {date} {time_from}. Mode 'Notify Only'.")
+                            print(f"🔔 Found shift {date} {shift_time}. Mode 'Notify Only'.")
                             return "NOTIFY", None
 
                         try:
@@ -165,22 +210,22 @@ def attempt_booking(driver, target_date, target_time_type, target_shift_type, fo
                             time.sleep(1)
                             driver.execute_script("arguments[0].click();", subscribe_btn)
                         except Exception:
-                            return False, f"Could not click 'Subscribe' for {date} {time_from}."
+                            return False, f"Could not click 'Subscribe' for {date} {shift_time}."
 
                         wait = WebDriverWait(driver, 5)
                         try:
                             lunch_radio = wait.until(EC.element_to_be_clickable((By.ID, "lunch_yes")))
                             lunch_radio.click()
                         except TimeoutException:
-                            return False, f"Could not find 'Lunch' checkbox for {date} {time_from}."
+                            return False, f"Could not find 'Lunch' checkbox for {date} {shift_time}."
                         
                         try:
                             confirm_btn = wait.until(EC.element_to_be_clickable((By.ID, "subscribe_submit")))
-                            # confirm_btn.click()  # Uncomment for live booking
+                            confirm_btn.click()  # Uncomment for live booking
                             print("[TEST] Subscription confirmation window passed!")
                             return True, None
                         except TimeoutException:
-                            return False, f"Could not find 'Confirm' button for {date} {time_from}."
+                            return False, f"Could not find 'Confirm' button for {date} {shift_time}."
                         
             except NoSuchElementException:
                 continue
